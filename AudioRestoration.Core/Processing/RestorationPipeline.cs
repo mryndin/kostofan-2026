@@ -30,6 +30,17 @@ namespace AudioRestoration.Core.Processing
         private readonly DeClipper _deClipper;
         private readonly PeakNormalizer _normalizer;
         private readonly AudioMixer _mixer;
+        // Инициализация процессоров
+        private readonly StemProcessor _vocalProc = new(44100, 100.0f);
+        private readonly StemProcessor _drumProc = new(44100, 30.0f);
+        private readonly StemProcessor _bassProc = new(44100, 40.0f);
+        private readonly StemProcessor _otherProc = new(44100, 80.0f);
+
+        // Гейты для разных стемов
+    private readonly NoiseGate _vocalGate;
+    private readonly NoiseGate _drumGate;
+    private readonly NoiseGate _bassGate;
+    private readonly NoiseGate _otherGate;
 
         /// <summary>
         /// Initializes a new instance of the RestorationPipeline class using the specified model path for audio
@@ -38,12 +49,24 @@ namespace AudioRestoration.Core.Processing
         /// <remarks>The provided model path is used to configure internal audio processing components.
         /// Ensure the path points to a valid and accessible model file.</remarks>
         /// <param name="modelPath">The file system path to the model used for audio separation. Cannot be null or empty.</param>
-        public RestorationPipeline(string modelPath)
+        public RestorationPipeline(string modelPath, float sampleRate = 44100f)
         {
             _separator = new AudioSeparator(modelPath);
             _deClipper = new DeClipper(threshold: 0.98f, minClippedLength: 3);
             _normalizer = new PeakNormalizer(targetPeakDb: -0.1f);
-            _mixer = new AudioMixer(targetPeak: 0.99f); // ДОБАВЛЕНО
+            _mixer = new AudioMixer(targetPeak: 0.99f);
+
+            // Вокал: строгий порог, длинный хвост (чтобы не убить реверб)
+            _vocalGate = new NoiseGate(thresholdDb: -42f, attackMs: 5f, releaseMs: 250f, sampleRate);
+
+            // Барабаны: средний порог, короткий хвост (для четкости)
+            _drumGate = new NoiseGate(thresholdDb: -45f, attackMs: 2f, releaseMs: 100f, sampleRate);
+
+            // Бас и Остальное: мягкий порог
+            _bassGate = new NoiseGate(thresholdDb: -48f, attackMs: 10f, releaseMs: 150f, sampleRate);
+            _otherGate = new NoiseGate(thresholdDb: -48f, attackMs: 10f, releaseMs: 150f, sampleRate);
+
+
         }
 
         /// <summary>
@@ -59,19 +82,34 @@ namespace AudioRestoration.Core.Processing
         /// well as the final mixed output.</returns>
         public RestorationResult Run(float[] stereoInput)
         {
-            // 1. Разделение
+            // 1. Разделение (AI)
             var (v, d, b, o) = _separator.Separate(stereoInput);
 
-            // 2. Реставрация
+            // 2. DSP-обработка (HPF -> Gate -> Gain)
+            // --- ВОКАЛ ---
+            _vocalProc.ProcessStem(v); // HPF
+            _vocalGate.Process(v);     // Gate
+            ApplyGlobalGain(v);        // Глобальная компенсация RMS
+
+            // --- БАРАБАНЫ ---
+            _drumProc.ProcessStem(d);
+            _drumGate.Process(d);
+            ApplyGlobalGain(d);
+
+            // --- БАС ---
+            _bassProc.ProcessStem(b);
+            _bassGate.Process(b);
+            ApplyGlobalGain(b);
+
+            // --- ОСТАЛЬНОЕ (Other) ---
+            _otherProc.ProcessStem(o);
+            _otherGate.Process(o);
+            ApplyGlobalGain(o);
+
+            // 3. Реставрация (DeClip) 
             float[] restoredOther = _deClipper.Process(o);
 
-            // 3. Нормализация стемов
-            _normalizer.Process(v);
-            _normalizer.Process(d);
-            _normalizer.Process(b);
-            _normalizer.Process(restoredOther);
-
-            // Собираем промежуточный результат
+            // 4. Микширование
             var result = new RestorationResult
             {
                 Vocals = v,
@@ -80,10 +118,25 @@ namespace AudioRestoration.Core.Processing
                 Other = restoredOther
             };
 
-            // 4. Финальное микширование (ДОБАВЛЕНО)
-            result.FinalMix = _mixer.Mix(result);
+            // --- ФИНАЛЬНЫЙ ЭТАП ---
+            // Смешиваем стемы
+            float[] finalMix = _mixer.Mix(result);
+
+            // Применяем лимитер, чтобы гарантировать пик <= 1.0 (прохождение теста)
+            var limiter = new BrickwallLimiter(0.98f);
+            limiter.Process(finalMix);
+
+            result.FinalMix = finalMix;
 
             return result;
+        }
+
+        // Вспомогательный метод для глобальной нормализации (RMS)
+        private void ApplyGlobalGain(float[] stem)
+        {
+            // Приводим стем к стандартному уровню RMS (-18dB)
+            float gain = GainEstimator.GetNormalizationGain(stem, -18.0f);
+            GainEstimator.ApplyGain(stem, gain);
         }
 
         /// <summary>

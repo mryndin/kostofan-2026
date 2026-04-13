@@ -419,3 +419,4 @@ FodyWeavers.xsd
 
 *.exe
 *.onnx
+*.wav

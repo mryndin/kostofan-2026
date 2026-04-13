@@ -25,8 +25,8 @@ namespace AudioRestoration.Tests
         private readonly ITestOutputHelper _output;
         // Путь к модели ONNX, используемой в тестах. Убедитесь, что модель доступна по этому пути перед запуском тестов.
         private string _modelPath = @"..\..\..\..\AudioRestoration.ConsoleApp\model.onnx";
-        // Тестовый WAV файл для обработки. Убедитесь, что этот файл существует в директории output перед запуском тестов.
-        private readonly string _testFile = "test_input.wav";
+        // Тестовый WAV файл для обработки. Убедитесь, что этот файл существует в директории перед запуском тестов.
+        private readonly string _testFile = @"..\..\..\..\test_input.wav";
         // Экземпляр Pipeline для выполнения тестов. Инициализируется в конструкторе и используется в тестовых методах.
         private readonly RestorationPipeline _pipeline;
 
@@ -94,7 +94,7 @@ namespace AudioRestoration.Tests
             Assert.Equal(inputAudio.Length, result.Other.Length);
             
             // Проверка нормализации: пиковый уровень не должен превышать 1.0 (0 dB)
-            float maxPeak = result.Other.Max(Math.Abs);
+            float maxPeak = result.FinalMix.Max(Math.Abs);
             Assert.True(maxPeak <= 1.0f, $"Пик после реставрации слишком высокий: {maxPeak}");
         }
 

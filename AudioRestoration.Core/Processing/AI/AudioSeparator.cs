@@ -174,7 +174,7 @@ namespace AudioRestoration.Core.Processing.AI
             var finalResult = new float[4, 2, requiredSamples];
 
             // Количество проходов (чем больше, тем меньше артефактов, но дольше время)
-            int numShifts = 4;
+            int numShifts = 12;
             int shiftStep = requiredSamples / numShifts; // Равномерное распределение сдвигов
 
             for (int pass = 0; pass < numShifts; pass++)
