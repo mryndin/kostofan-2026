@@ -53,47 +53,42 @@ namespace AudioRestoration.Core.Processing.AI
         {
             int totalSamples = stereoInput.Length / 2;
 
-            // --- ВХОДНАЯ НОРМАЛИЗАЦИЯ (Gain Staging) ---
-            // Находим максимальный абсолютный пик оригинального трека
+            // --- 1. ПРЕДВАРИТЕЛЬНАЯ НОРМАЛИЗАЦИЯ ---
+            // Создаем копию, чтобы не мутировать исходный массив (важно для тестов)
+            float[] processedInput = new float[stereoInput.Length];
             float maxPeak = 0f;
+
             for (int i = 0; i < stereoInput.Length; i++)
             {
                 float abs = Math.Abs(stereoInput[i]);
                 if (abs > maxPeak) maxPeak = abs;
             }
 
-            // Идеальный уровень для Demucs - около 0.9 (-0.9 dB)
-            float normalizationScale = 1.0f;
-            if (maxPeak > 0.01f)
+            float normalizationScale = maxPeak > 0.01f ? 0.9f / maxPeak : 1.0f;
+            for (int i = 0; i < stereoInput.Length; i++)
             {
-                normalizationScale = 0.9f / maxPeak;
-                // Подтягиваем громкость всего трека до оптимального уровня перед обработкой
-                for (int i = 0; i < stereoInput.Length; i++)
-                {
-                    stereoInput[i] *= normalizationScale;
-                }
+                processedInput[i] = stereoInput[i] * normalizationScale;
             }
 
-            // Буферы для накопления результата (4 стема * 2 канала)
+            // --- 2. ПОДГОТОВКА БУФЕРОВ ---
             var sumBuffers = new float[4][];
             for (int i = 0; i < 4; i++) sumBuffers[i] = new float[stereoInput.Length];
-
-            // Буфер весов для нормализации склейки
             var weightBuffer = new float[stereoInput.Length];
 
-            // Генерируем окно (Tapering window) для плавного смешивания
-            float[] window = GetWindow(ChunkSamples);
+            // Генерируем COLA-совместимое окно Ханна
+            float[] window = GetHannWindow(ChunkSamples);
 
-            for (int offset = 0; offset < totalSamples; offset += Stride)
+            // ВАЖНО: 50% Overlap (шаг равен половине чанка)
+            int stride = ChunkSamples / 2;
+
+            // --- 3. ЦИКЛ OVERLAP-ADD ---
+            for (int offset = 0; offset < totalSamples; offset += stride)
             {
-                // 1. Извлечение чанка (с дополнением нулями в конце, если нужно)
-                var chunk = GetChunk(stereoInput, offset, ChunkSamples);
+                var chunk = GetChunk(processedInput, offset, ChunkSamples);
 
-                // 2. Инференс (на выходе 8 каналов: 4 стема по 2 канала)
-                // Передаем ChunkSamples для обновленного метода с поддержкой Shift Trick
+                // Инференс (внутри выполняется Shift Trick, если он у вас там прописан)
                 var output = RunInference(chunk, ChunkSamples);
 
-                // 3. Смешивание результата с основным буфером
                 for (int s = 0; s < 4; s++)
                 {
                     for (int i = 0; i < ChunkSamples; i++)
@@ -103,12 +98,10 @@ namespace AudioRestoration.Core.Processing.AI
 
                         float w = window[i];
 
-                        // Левый канал
                         sumBuffers[s][targetIdx] += output[s, 0, i] * w;
-                        // Правый канал
                         sumBuffers[s][targetIdx + 1] += output[s, 1, i] * w;
 
-                        // Накапливаем веса только один раз (они общие для всех стемов)
+                        // Накапливаем веса только один раз для стерео-пары
                         if (s == 0)
                         {
                             weightBuffer[targetIdx] += w;
@@ -117,25 +110,43 @@ namespace AudioRestoration.Core.Processing.AI
                     }
                 }
 
+                // Если мы обработали хвост файла, выходим
                 if (offset + ChunkSamples >= totalSamples) break;
             }
 
-            // --- ФИНАЛЬНАЯ НОРМАЛИЗАЦИЯ И ДЕНОРМАЛИЗАЦИЯ ---
-            // Вычисляем обратный масштаб для возврата оригинальной громкости
+            // --- 4. ДЕНОРМАЛИЗАЦИЯ И ВЫРАВНИВАНИЕ ---
             float inverseScale = 1.0f / normalizationScale;
 
-            // 4. Финальная нормализация (деление на сумму весов + возврат исходной громкости)
             for (int i = 0; i < stereoInput.Length; i++)
             {
-                float w = weightBuffer[i] > 0 ? weightBuffer[i] : 1f;
+                // Защита: на самых краях файла (первые и последние сэмплы) вес может быть < 1. 
+                // Чтобы не было взрыва громкости при делении на 0.0001, ставим лимит.
+                float w = weightBuffer[i];
+                if (w < 1e-6f) w = 1.0f;
+
                 for (int s = 0; s < 4; s++)
                 {
-                    // Делим на вес окна склейки И умножаем на обратный масштаб
                     sumBuffers[s][i] = (sumBuffers[s][i] / w) * inverseScale;
                 }
             }
 
             return (sumBuffers[0], sumBuffers[1], sumBuffers[2], sumBuffers[3]);
+        }
+
+        /// <summary>
+        /// Генерирует окно Ханна (Hann Window) для идеального Constant Overlap-Add.
+        /// Формула: w(n) = 0.5 * (1 - cos(2*PI*n / N))
+        /// </summary>
+        private float[] GetHannWindow(int length)
+        {
+            float[] window = new float[length];
+            for (int i = 0; i < length; i++)
+            {
+                // Используем length (а не length - 1) для периодического окна, 
+                // которое дает идеальную единицу при сложении 50% сдвигов
+                window[i] = 0.5f * (1.0f - (float)Math.Cos(2.0 * Math.PI * i / length));
+            }
+            return window;
         }
 
         /// <summary>
