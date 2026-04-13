@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="AudioRestoration.ConsoleApp/AudioRestoration.ConsoleApp.csproj" />
+  <Project Path="AudioRestoration.Core/AudioRestoration.Core.csproj" />
+  <Project Path="AudioRestoration.Tests/AudioRestoration.Tests.csproj" />
+</Solution>
