@@ -6,7 +6,7 @@ namespace AudioRestoration.Core.Processing.DSP
     /// Biquad-фильтр второго порядка.
     /// Реализует высокочастотный фильтр (HPF) с использованием топологии Direct Form 1.
     /// </summary>
-    public class BiquadFilter
+    public class BiquadFilter : ISoundFilter
     {
         // Коэффициенты фильтра
         private float _b0, _b1, _b2, _a1, _a2;

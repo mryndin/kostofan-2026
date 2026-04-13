@@ -9,8 +9,8 @@ namespace AudioRestoration.Core.Processing.DSP
     /// </summary>
     public class StemProcessor
     {
-        private readonly BiquadFilter _leftFilter;
-        private readonly BiquadFilter _rightFilter;
+        private readonly FilterChain _leftChain = new();
+        private readonly FilterChain _rightChain = new();
 
         /// <summary>
         /// Инициализация процессора стема.
@@ -19,28 +19,25 @@ namespace AudioRestoration.Core.Processing.DSP
         /// <param name="cutoff">Частота среза для HPF</param>
         public StemProcessor(float sampleRate, float cutoff)
         {
-            _leftFilter = new BiquadFilter(sampleRate, cutoff);
-            _rightFilter = new BiquadFilter(sampleRate, cutoff);
+            // Создаем два идентичных фильтра для каскада (даст 24 дБ/окт)
+            _leftChain.AddFilter(new BiquadFilter(sampleRate, cutoff));
+            _leftChain.AddFilter(new BiquadFilter(sampleRate, cutoff));
+
+            _rightChain.AddFilter(new BiquadFilter(sampleRate, cutoff));
+            _rightChain.AddFilter(new BiquadFilter(sampleRate, cutoff));
         }
 
         /// <summary>
         /// Применяет фильтрацию к массиву сэмплов стема (интерливинг L-R).
         /// </summary>
         /// <param name="stemSamples">Массив [L, R, L, R, ...]</param>
-        public void ProcessStem(float[] stemSamples)
+        public void ProcessStem(float[] samples)
         {
-            // Проход по интерливированному массиву с шагом 2
-            for (int i = 0; i < stemSamples.Length; i += 2)
+            for (int i = 0; i < samples.Length; i += 2)
             {
-                // Левый канал
-                stemSamples[i] = _leftFilter.Process(stemSamples[i]);
-                
-                // Проверка на случай нечетного количества сэмплов (защита от выхода за массив)
-                if (i + 1 < stemSamples.Length)
-                {
-                    // Правый канал
-                    stemSamples[i + 1] = _rightFilter.Process(stemSamples[i + 1]);
-                }
+                samples[i] = _leftChain.Process(samples[i]);
+                if (i + 1 < samples.Length)
+                    samples[i + 1] = _rightChain.Process(samples[i + 1]);
             }
         }
 
@@ -49,8 +46,8 @@ namespace AudioRestoration.Core.Processing.DSP
         /// </summary>
         public void Reset()
         {
-            _leftFilter.Reset();
-            _rightFilter.Reset();
+            _leftChain.Reset();
+            _rightChain.Reset();
         }
     }
 }
